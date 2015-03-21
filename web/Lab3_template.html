@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title>shader library - lab3</title>
+	<meta http-equiv="content-type" content="text/html; charset=windows-1252" />
+	<link rel="stylesheet" type="text/css" href="http://fonts.googleapis.com/css?family=Tangerine&amp;v1" />
+	<link rel="stylesheet" type="text/css" href="http://fonts.googleapis.com/css?family=Yanone+Kaffeesatz" />
+	
+	<script type="text/javascript" src="../js/glMatrix-0.9.5.js"></script>
+	<script type="text/javascript" src="../js/webgl-utils.js"></script>
+	
+	<script id="shader-fs" type="x-shader/x-fragment">
+    precision mediump float;
+	varying vec2 vTextureCoord;
+    uniform sampler2D uSampler;
+	uniform int uOption;  // variable used to decide render texture or plain color
+    void main(void) {
+		if(uOption==0)
+			gl_FragColor = texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t)); // show texture
+		if(uOption==1)
+			gl_FragColor = vec4(0,3,0.7,0.6); //show blue color for the wall
+		if(uOption==2)
+			gl_FragColor = vec4(0.1,0.1,0.1,1.0); // show grey color for the floor
+		
+    }
+	</script>
+
+	<script id="shader-vs" type="x-shader/x-vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec2 aTextureCoord;
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    varying vec2 vTextureCoord;
+    void main(void) {
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+        vTextureCoord = aTextureCoord;
+    }
+	</script>
+<script>
+// Class: CSE 5542 Real-Time Rendering (Prof. Raghu Machiraju )
+// Assignment: Lab3 Texture
+// author: Tzu-Hsaune Wei
+// reference: https://github.com/gpjt/webgl-lessons/blob/master/lesson05/index.html
+
+var canvas, gl;
+var Texture,squareimage;  //variables for texture and image 
+var mvMatrix = mat4.create(); // model-view matrix
+var pMatrix = mat4.create(); // projection matrix
+var squareVertexPositionBuffer;  //vertex buffer for a square
+var squareVertexTextureCoordBuffer; // texture coordinate buffer
+var cubeVertexIndexBuffer; // index buffer
+
+var mvMatrixStack = []; //model-view matrix stack
+
+function getShader(gl, id) {
+        var shaderScript = document.getElementById(id);
+        if (!shaderScript) {
+            return null;
+        }
+
+        var str = "";
+        var k = shaderScript.firstChild;
+        while (k) {
+            if (k.nodeType == 3) {
+                str += k.textContent;
+            }
+            k = k.nextSibling;
+        }
+
+        var shader;
+        if (shaderScript.type == "x-shader/x-fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } else if (shaderScript.type == "x-shader/x-vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } else {
+            return null;
+        }
+
+        gl.shaderSource(shader, str);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+
+        return shader;
+    }
+	
+//load and initialize shader 
+function initShaders() {
+	var fragmentShader = getShader(gl, "shader-fs"); 
+    var vertexShader = getShader(gl, "shader-vs"); 
+
+    shaderProgram = gl.createProgram();
+    gl.attachShader(shaderProgram, vertexShader);   // attach vertex shader
+    gl.attachShader(shaderProgram, fragmentShader); //attach fragment shader
+    gl.linkProgram(shaderProgram);
+
+    if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+          alert("Could not initialise shaders");
+    }
+
+    gl.useProgram(shaderProgram);
+
+	shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition"); //set vertex positions to the shader
+    gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+    shaderProgram.textureCoordAttribute = gl.getAttribLocation(shaderProgram, "aTextureCoord"); //set texture coordinate to the shader
+    gl.enableVertexAttribArray(shaderProgram.textureCoordAttribute);
+
+    shaderProgram.pMatrixUniform = gl.getUniformLocation(shaderProgram, "uPMatrix");  // set projection matrix to the shader
+    shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix"); // set model-view matrix to the shader
+    shaderProgram.samplerUniform = gl.getUniformLocation(shaderProgram, "uSampler") //// set texture to the shader
+	shaderProgram.option = gl.getUniformLocation(shaderProgram, "uOption");	 // set render option variable to the shader
+}
+
+// take account of current model-view and projection matrix
+function setMatrixUniforms() {
+     gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix); //projection matrix
+     gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix); //model-view matrix
+}
+
+//handle and set current texture
+function genTexture(texture,image) {
+    gl.bindTexture(gl.TEXTURE_2D, texture); // bind current texture
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);   //flip images vertically 
+	gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA,gl.RGBA, gl.UNSIGNED_BYTE, image); // upload loaded image to the texture’s space 
+	
+	//set up the scale hint when a rendered surface and texture bitmap have different size
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+	gl.generateMipmap(gl.TEXTURE_2D);
+	
+    gl.bindTexture(gl.TEXTURE_2D, null); //set current texture to NULL
+} 
+
+//read texture from images
+function initTexture() {
+    Texture = gl.createTexture();  //create texture
+    squareimage = new Image();     // create image
+    squareimage.onload = function() {
+      genTexture(Texture,squareimage);
+    }
+
+    squareimage.src = "maze.gif";  //read an image from the file name
+}
+  
+// construct vertex buffer of a square and set the corresponding texture coordinate
+function initBuffers() {
+
+		//vertex positions for the rendered surface
+        squareVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexPositionBuffer);
+        vertices = [
+            -1.0, -1.0,  1.0,
+             1.0, -1.0,  1.0,
+             1.0,  1.0,  1.0,
+            -1.0,  1.0,  1.0
+        ];
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+        squareVertexPositionBuffer.itemSize = 3;
+        squareVertexPositionBuffer.numItems = 4;
+		
+		//texture coordinate 
+		squareVertexTextureCoordBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexTextureCoordBuffer);
+		var textureCoords = [
+          0.0, 0.0,
+          1.0, 0.0,
+          1.0, 1.0,
+          0.0, 1.0
+        ];
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+        squareVertexTextureCoordBuffer.itemSize = 2;
+        squareVertexTextureCoordBuffer.numItems = 24;		
+		
+		//index order for the rendered surface
+		cubeVertexIndexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cubeVertexIndexBuffer);
+        var cubeVertexIndices = [
+            0, 1, 2,  0, 2, 3   
+        ];
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(cubeVertexIndices), gl.STATIC_DRAW);
+        cubeVertexIndexBuffer.itemSize = 1;
+        cubeVertexIndexBuffer.numItems = 6;		
+}
+ 
+var mouseDown = false;
+var lastMouseX = null, lastMouseY = null;
+
+function onMouseDown(event) {
+
+}
+
+function onMouseUp(event) {
+
+}
+
+function onMouseMove(event) {
+}
+
+//push the current model-view matrix to a stack
+function mvPushMatrix() {
+        var copy = mat4.create();
+        mat4.set(mvMatrix, copy);
+        mvMatrixStack.push(copy);
+}
+
+//pop out a model-view matrix from the stack    
+function mvPopMatrix() {
+        if (mvMatrixStack.length == 0) {
+            throw "Invalid popMatrix!";
+        }
+        mvMatrix = mvMatrixStack.pop();
+}
+//initial setting
+function glInit() {
+	// init webgl context
+	canvas = document.getElementById("canvas");
+	gl = canvas.getContext("experimental-webgl");
+
+	gl.clearColor(1.0, 1.0, 1.0, 1.0);
+	gl.enable(gl.DEPTH_TEST);
+
+	// add event listeners
+	window.addEventListener('resize', glResize, false);
+	canvas.onmousedown = onMouseDown;
+	document.onmouseup = onMouseUp;
+	document.onmousemove = onMouseMove;
+}
+
+function glResize() {
+	// resize canvas
+	canvas.width = window.innerWidth;
+	canvas.height = window.innerHeight;
+
+	// reset viewport
+	gl.viewportWidth = canvas.width;
+	gl.viewportHeight = canvas.height;
+	gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+	
+	// reset projection matrix
+	mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
+	mat4.identity(mvMatrix);
+
+}
+
+// convert degrees to radians
+function degToRad(degrees) {
+        return degrees * Math.PI / 180;
+ }
+
+// render vertices and textures
+function glRender() {
+	gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+		
+	mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
+	mat4.identity(mvMatrix);  //set model-view matrix as identical matrix
+	
+	mat4.translate(mvMatrix, [0.0, 0.0, -5.0]); 
+	//wall 1
+	gl.uniform1i(shaderProgram.option,0); //use texture as color
+    gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexPositionBuffer); //bind vertex buffer
+    gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, squareVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+	
+	//texture
+	gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexTextureCoordBuffer); //bind texture buffer
+    gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, squareVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);    
+	gl.activeTexture(gl.TEXTURE0); //set current texture as Texture 0
+    gl.bindTexture(gl.TEXTURE_2D, Texture);
+    gl.uniform1i(shaderProgram.samplerUniform, 0); //passing 0 to a shader uniform
+	
+	gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cubeVertexIndexBuffer); //bind index buffer
+	setMatrixUniforms(); 
+	gl.drawElements(gl.TRIANGLES, cubeVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0); //draw elements
+	
+	gl.uniform1i(shaderProgram.option,1); //use blue color
+	mvPushMatrix();
+	//wall 2
+	mat4.translate(mvMatrix, [-2.0, 0.0, 0.0]);
+	mat4.translate(mvMatrix, [0.0, 0.0, 2.0]);
+	mat4.rotate(mvMatrix, degToRad(90), [0, 1, 0]);
+	setMatrixUniforms();
+	gl.drawElements(gl.TRIANGLES, cubeVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+	mvPopMatrix();
+	
+	mvPushMatrix();
+	//wall 3
+	mat4.translate(mvMatrix, [0.0, 0.0, 2.0]);
+	mat4.rotate(mvMatrix, degToRad(90), [0, 1, 0]);
+	setMatrixUniforms();
+	gl.drawElements(gl.TRIANGLES, cubeVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+	mvPopMatrix();
+	
+	//floor
+	gl.uniform1i(shaderProgram.option,2); //use grey color
+	mat4.translate(mvMatrix, [0.0, 0.0, 2.0]);
+	mat4.rotate(mvMatrix, degToRad(90), [1, 0, 0]);
+	setMatrixUniforms();
+	gl.drawElements(gl.TRIANGLES, cubeVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+}
+
+function tick() {
+        requestAnimFrame(tick);
+        glRender();
+    }
+	
+function glMain() {
+	glInit();
+	initShaders();	
+	initBuffers();
+	initTexture();
+		
+	glResize();
+	tick();
+}
+</script>
+</head>
+
+<body onload="glMain()">
+	<div id="container">
+		<canvas id="canvas" style="border: none;" width="256" height="256"></canvas>
+	</div>
+</body>
+
+</html>
